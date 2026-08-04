@@ -1,0 +1,2118 @@
+openapi: 3.0.3
+info:
+  title: SyncWrite API
+  version: 1.0.0
+  description: |
+    REST API for **SyncWrite** — a real-time collaborative document editor inspired by Google Docs.
+
+    SyncWrite enables multiple users to edit documents simultaneously (CRDT via Yjs),
+    manage versions, leave threaded comments, share documents with role-based permissions,
+    and receive real-time notifications.
+
+    ## Authentication
+    The API uses **session-based authentication** (express-session + connect-mongo).
+    Clients must send the session cookie (`connect.sid`) with every authenticated request.
+    - Register, login, and Google OAuth flow create the session.
+    - All endpoints except `register`, `login`, and the Google OAuth endpoints require a valid session.
+    - Unauthenticated requests receive `401 Unauthorized`.
+
+    ## Base URL
+    Development: `http://localhost:5000`
+
+    ## Real-Time (WebSocket)
+    Socket.IO is mounted on the same server. See **WebSocket Events** section in the
+    human-readable docs (`docs/API.md`) for the event contract. Yjs (y-socket.io) handles
+    CRDT collaboration streams.
+  contact:
+    name: SyncWrite Team
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:5000
+    description: Local development server
+  - url: https://api.syncwrite.example.com
+    description: Production server (placeholder)
+
+tags:
+  - name: Authentication
+    description: Register, login, logout, profile, sessions, user search
+  - name: Documents
+    description: CRUD operations for documents
+  - name: Sharing
+    description: Document sharing and role-based permissions
+  - name: Comments
+    description: Threaded comments, replies, resolution
+  - name: Versions
+    description: Version history, restore, rename
+  - name: Presence
+    description: Online presence of users in a document
+  - name: Notifications
+    description: User notifications and read state
+  - name: Uploads
+    description: Image uploads for the editor
+
+paths:
+  # ============================================================
+  # AUTHENTICATION
+  # ============================================================
+  /api/auth/register:
+    post:
+      tags: [Authentication]
+      summary: Register a new user
+      description: Creates a user account with email + password. Password must be 8+ chars with uppercase, number, and special character.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                name:
+                  type: string
+                  minLength: 2
+                  maxLength: 100
+                  example: Jane Doe
+                email:
+                  type: string
+                  format: email
+                  example: jane@example.com
+                password:
+                  type: string
+                  minLength: 8
+                  example: "StrongPass1!"
+      responses:
+        "200":
+          description: User created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          description: Validation error (weak password, duplicate email, short name)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/auth/login:
+    post:
+      tags: [Authentication]
+      summary: Log in
+      description: |
+        Authenticates the user and creates a session.
+        Rate-limited to 5 failed attempts per email/IP before a 10-minute lockout (HTTP 429).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: jane@example.com
+                password:
+                  type: string
+                  example: "StrongPass1!"
+      responses:
+        "200":
+          description: Login successful (session cookie set)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Login successful
+                  suspicious:
+                    type: boolean
+                    description: True when login comes from a new/unrecognized device
+                    example: false
+                  user:
+                    $ref: "#/components/schemas/UserSummary"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Too many failed attempts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/auth/logout:
+    get:
+      tags: [Authentication]
+      summary: Log out
+      description: Destroys the current session.
+      security:
+        - sessionAuth: []
+      responses:
+        "200":
+          description: Session destroyed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Logged out
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/auth/profile:
+    get:
+      tags: [Authentication]
+      summary: Get current user profile
+      description: Returns the authenticated user's session data.
+      security:
+        - sessionAuth: []
+      responses:
+        "200":
+          description: Current session user
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+                  email:
+                    type: string
+                  avatar:
+                    type: string
+                  ip:
+                    type: string
+                  userAgent:
+                    type: string
+                  suspicious:
+                    type: boolean
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/auth/refresh-session:
+    post:
+      tags: [Authentication]
+      summary: Refresh session
+      description: |
+        Returns 200 OK to trigger a session touch. The `rolling: true` cookie policy
+        automatically resets the session cookie `maxAge`, extending the login window.
+      security:
+        - sessionAuth: []
+      responses:
+        "200":
+          description: Session refreshed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Session refreshed
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/auth/google:
+    get:
+      tags: [Authentication]
+      summary: Google OAuth login
+      description: Redirects the browser to Google's consent screen (scopes: profile, email).
+      responses:
+        "302":
+          description: Redirect to Google OAuth consent screen
+
+  /api/auth/google/callback:
+    get:
+      tags: [Authentication]
+      summary: Google OAuth callback
+      description: |
+        Handles the Google OAuth redirect. On success creates/updates the user,
+        establishes a session, and redirects to the frontend (`/dashboard` or a
+        `post_login_redirect` cookie path). On failure redirects to the frontend root.
+      responses:
+        "302":
+          description: Redirect to the frontend dashboard
+
+  /api/auth/sessions:
+    get:
+      tags: [Authentication]
+      summary: List active sessions
+      description: Returns all active sessions for the authenticated user.
+      security:
+        - sessionAuth: []
+      responses:
+        "200":
+          description: List of sessions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        sid:
+                          type: string
+                        userId:
+                          type: string
+                        device:
+                          type: object
+                        createdAt:
+                          type: string
+                          format: date-time
+                        expires:
+                          type: string
+                          format: date-time
+                        isCurrent:
+                          type: boolean
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/auth/sessions/{sid}:
+    delete:
+      tags: [Authentication]
+      summary: Remove a session
+      description: Terminates another active session. Cannot remove the current session.
+      security:
+        - sessionAuth: []
+      parameters:
+        - in: path
+          name: sid
+          required: true
+          schema:
+            type: string
+          description: Session ID to remove
+      responses:
+        "200":
+          description: Session removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Session removed
+        "400":
+          description: Cannot remove the current session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/auth/users:
+    get:
+      tags: [Authentication]
+      summary: Search user by email (exact)
+      security:
+        - sessionAuth: []
+      parameters:
+        - in: query
+          name: email
+          required: true
+          schema:
+            type: string
+            format: email
+          description: Exact email to look up
+      responses:
+        "200":
+          description: Matching user
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      _id:
+                        type: string
+                      email:
+                        type: string
+                      name:
+                        type: string
+        "400":
+          description: Missing email query parameter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/auth/users/search:
+    get:
+      tags: [Authentication]
+      summary: Search user suggestions
+      description: Fuzzy search by name or email prefix (used for mention/sharing suggestions).
+      security:
+        - sessionAuth: []
+      parameters:
+        - in: query
+          name: q
+          required: true
+          schema:
+            type: string
+          description: Search query
+      responses:
+        "200":
+          description: List of matching users
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        _id:
+                          type: string
+                        email:
+                          type: string
+                        name:
+                          type: string
+                        avatar:
+                          type: string
+
+  # ============================================================
+  # DOCUMENTS
+  # ============================================================
+  /api/documents:
+    post:
+      tags: [Documents]
+      summary: Create a document
+      security:
+        - sessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title:
+                  type: string
+                  minLength: 3
+                  maxLength: 200
+                  example: Project Proposal
+      responses:
+        "201":
+          description: Document created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/Document"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    get:
+      tags: [Documents]
+      summary: Get my documents
+      description: Returns documents owned by the current user, sorted by most recently updated.
+      security:
+        - sessionAuth: []
+      responses:
+        "200":
+          description: List of owned documents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Document"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/documents/shared:
+    get:
+      tags: [Documents]
+      summary: Get shared documents
+      description: Returns documents shared with the current user, including the granted permission.
+      security:
+        - sessionAuth: []
+      responses:
+        "200":
+          description: List of shared documents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: "#/components/schemas/Document"
+                        - type: object
+                          properties:
+                            sharePermission:
+                              $ref: "#/components/schemas/Permission"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/documents/recent:
+    get:
+      tags: [Documents]
+      summary: Get recent documents
+      description: Returns up to 5 recently updated documents (owned or shared), deduplicated.
+      security:
+        - sessionAuth: []
+      responses:
+        "200":
+          description: List of recent documents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Document"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/documents/cleanup-shares:
+    post:
+      tags: [Documents]
+      summary: Clean up orphaned shares
+      description: Removes all shares pointing to soft-deleted documents (maintenance endpoint).
+      security:
+        - sessionAuth: []
+      responses:
+        "200":
+          description: Cleanup completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                  deletedCount:
+                    type: integer
+
+  /api/documents/{id}:
+    get:
+      tags: [Documents]
+      summary: Get a single document
+      security:
+        - sessionAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: Document ID
+      responses:
+        "200":
+          description: Document
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/Document"
+        "404":
+          description: Document not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      tags: [Documents]
+      summary: Delete a document
+      description: |
+        Soft-deletes the document (sets `isDeleted: true`) and removes all its shares.
+        Only the document owner can delete.
+      security:
+        - sessionAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: Document ID
+      responses:
+        "200":
+          description: Document deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Document deleted
+        "400":
+          description: Permission or validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/documents/{id}/title:
+    put:
+      tags: [Documents]
+      summary: Rename a document
+      description: Owner or editor can rename. Emits a `document-renamed` socket event.
+      security:
+        - sessionAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: Document ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title:
+                  type: string
+                  minLength: 3
+                  maxLength: 200
+                  example: Revised Proposal v2
+      responses:
+        "200":
+          description: Document renamed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/Document"
+        "400":
+          description: Validation or permission error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/documents/{id}/duplicate:
+    post:
+      tags: [Documents]
+      summary: Duplicate a document
+      description: Owner or editor can duplicate. The copy is owned by the requesting user.
+      security:
+        - sessionAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: Source document ID
+      responses:
+        "201":
+          description: Duplicate created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/Document"
+        "400":
+          description: Permission error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/documents/{id}/content:
+    put:
+      tags: [Documents]
+      summary: Update document content
+      description: |
+        Replaces the full TipTap/ProseMirror JSON content. Editor permission required.
+        Triggers the smart version engine (may auto-create a version checkpoint).
+      security:
+        - sessionAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: Document ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:
+                  type: object
+                  description: TipTap JSON document
+                  example:
+                    type: doc
+                    content:
+                      - type: paragraph
+                        content:
+                          - type: text
+                            text: Hello world
+      responses:
+        "200":
+          description: Content updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/Document"
+        "400":
+          description: Validation or permission error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/documents/{id}/page-settings:
+    put:
+      tags: [Documents]
+      summary: Update page numbering settings
+      description: Updates the page numbering configuration (visual page sections). Editor permission required.
+      security:
+        - sessionAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: Document ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pageNumberSettings]
+              properties:
+                pageNumberSettings:
+                  $ref: "#/components/schemas/PageNumberSettings"
+      responses:
+        "200":
+          description: Page settings updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/Document"
+        "400":
+          description: Validation or permission error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ============================================================
+  # SHARING
+  # ============================================================
+  /api/shares/{documentId}/share:
+    post:
+      tags: [Sharing]
+      summary: Share a document with a user
+      description: |
+        Grants a user access to a document. Creates a `share` notification for the
+        receiver in real time. Fails if the document is already shared with the user.
+      security:
+        - sessionAuth: []
+      parameters:
+        - in: path
+          name: documentId
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-f0-9]{24}$"
+          description: Document ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId]
+              properties:
+                userId:
+                  type: string
+                  pattern: "^[a-f0-9]{24}$"
+                  description: ID of the user to share with
+                permission:
+                  $ref: "#/components/schemas/Permission"
+      responses:
+        "201":
+          description: Document shared
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Document shared successfully
+                  data:
+                    $ref: "#/components/schemas/DocumentShare"
+        "400":
+          description: Already shared or invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Document not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/shares/{documentId}/share/{userId}:
+    patch:
+      tags: [Sharing]
+      summary: Update a user's permission
+      description: Changes a shared user's role. Sends a `role` notification in real time.
+      security:
+        - sessionAuth: []
+      parameters:
+        - in: path
+          name: documentId
+          required: true
+          schema:
+            type: string
+          description: Document ID
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: string
+          description: Shared user ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [permission]
+              properties:
+                permission:
+                  $ref: "#/components/schemas/Permission"
+      responses:
+        "200":
+          description: Permission updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Permission updated
+                  data:
+                    $ref: "#/components/schemas/DocumentShare"
+        "404":
+          description: Shared user not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      tags: [Sharing]
+      summary: Remove a shared user
+      description: Revokes a user's access to the document.
+      security:
+        - sessionAuth: []
+      parameters:
+        - in: path
+          name: documentId
+          required: true
+          schema:
+            type: string
+          description: Document ID
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: string
+          description: Shared user ID
+      responses:
+        "200":
+          description: User removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: User removed successfully
+        "404":
+          description: User is not shared on this document
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/shares/{documentId}/shared-users:
+    get:
+      tags: [Sharing]
+      summary: List shared users
+      description: Returns all users a document is shared with, with their roles and sharer info.
+      security:
+        - sessionAuth: []
+      parameters:
+        - in: path
+          name: documentId
+          required: true
+          schema:
+            type: string
+          description: Document ID
+      responses:
+        "200":
+          description: List of shares
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DocumentShare"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/shares/{documentId}/permission:
+    get:
+      tags: [Sharing]
+      summary: Check current user's permission
+      description: |
+        Returns the caller's access level. Owners get `owner`; shared users get their
+        granted role (`viewer`, `commenter`, or `editor`). Returns 403 for users with no access.
+      security:
+        - sessionAuth: []
+      parameters:
+        - in: path
+          name: documentId
+          required: true
+          schema:
+            type: string
+          description: Document ID
+      responses:
+        "200":
+          description: Permission level
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  permission:
+                    type: object
+                    properties:
+                      permission:
+                        type: string
+                        enum: [owner, viewer, commenter, editor]
+                        example: editor
+        "403":
+          description: User has no access to the document
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Document not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ============================================================
+  # COMMENTS
+  # ============================================================
+  /api/comments:
+    post:
+      tags: [Comments]
+      summary: Add a comment
+      description: |
+        Adds a comment to a document at a text position. Viewers cannot comment.
+        Supports `@[Name](email)` mention syntax. Sends `mention` and `comment`
+        notifications in real time.
+      security:
+        - sessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [documentId, text]
+              properties:
+                documentId:
+                  type: string
+                  description: Document ID
+                text:
+                  type: string
+                  maxLength: 2000
+                  description: Comment text, may contain mentions like @[Name](email)
+                content:
+                  type: string
+                  description: Alias for `text`
+                position:
+                  type: object
+                  description: Selection range in the document
+                  default: { start: 0, end: 0 }
+                  properties:
+                    start:
+                      type: integer
+                      minimum: 0
+                    end:
+                      type: integer
+                      minimum: 0
+      responses:
+        "201":
+          description: Comment created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/Comment"
+        "400":
+          description: Validation or permission error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/comments/reply:
+    post:
+      tags: [Comments]
+      summary: Reply to a comment
+      description: |
+        Adds a threaded reply to an existing comment. Viewers cannot reply.
+        Notifies the thread participants and mentions.
+      security:
+        - sessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [documentId, parentCommentId, text]
+              properties:
+                documentId:
+                  type: string
+                parentCommentId:
+                  type: string
+                  description: ID of the comment being replied to
+                text:
+                  type: string
+                  maxLength: 2000
+                content:
+                  type: string
+                  description: Alias for `text`
+      responses:
+        "201":
+          description: Reply created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/Comment"
+        "400":
+          description: Validation or permission error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/comments/{documentId}:
+    get:
+      tags: [Comments]
+      summary: Get comments for a document
+      description: Returns all comments (and replies) for a document, newest first, with user info populated.
+      security:
+        - sessionAuth: []
+      parameters:
+        - in: path
+          name: documentId
+          required: true
+          schema:
+            type: string
+          description: Document ID
+      responses:
+        "200":
+          description: List of comments
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Comment"
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/comments/resolve/{commentId}:
+    post:
+      tags: [Comments]
+      summary: Resolve a comment
+      description: |
+        Marks a comment as resolved (kept in history). Owners and editors can resolve;
+        commenters cannot. Notifies thread participants.
+      security:
+        - sessionAuth: []
+      parameters:
+        - in: path
+          name: commentId
+          required: true
+          schema:
+            type: string
+          description: Comment ID
+      responses:
+        "200":
+          description: Comment resolved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/Comment"
+        "400":
+          description: Validation or permission error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/comments/{commentId}:
+    delete:
+      tags: [Comments]
+      summary: Delete a comment
+      description: |
+        Deletes a comment or reply. Only the author or document owner can delete.
+        Removes related notifications and notifies participants.
+      security:
+        - sessionAuth: []
+      parameters:
+        - in: path
+          name: commentId
+          required: true
+          schema:
+            type: string
+          description: Comment ID
+      responses:
+        "200":
+          description: Comment deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Comment deleted
+        "400":
+          description: Validation or permission error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ============================================================
+  # VERSIONS
+  # ============================================================
+  /api/versions/save:
+    post:
+      tags: [Versions]
+      summary: Save a version
+      description: |
+        Manually snapshots the document content. The smart version engine skips empty
+        content, duplicates of the last version, and versions created inside a cooldown
+        window. Returns `created: false` with a `reason` when skipped.
+      security:
+        - sessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [documentId, content]
+              properties:
+                documentId:
+                  type: string
+                content:
+                  type: object
+                  description: TipTap JSON document
+                changeSummary:
+                  type: string
+                  maxLength: 300
+                  example: After peer review feedback
+                meta:
+                  type: object
+                  description: Session metadata for versioning
+                  properties:
+                    sessionDuration:
+                      type: number
+                      description: Duration in seconds
+                    changeSize:
+                      type: string
+                      enum: [small, medium, large]
+                    operations:
+                      type: number
+                    type:
+                      type: string
+                      enum: [content_edit, structural_change, auto_save]
+      responses:
+        "201":
+          description: Version created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  created:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/Version"
+        "200":
+          description: Version skipped by the smart engine
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  created:
+                    type: boolean
+                    example: false
+                  reason:
+                    type: string
+                    enum: [empty, duplicate, cooldown]
+                  message:
+                    type: string
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/versions/{documentId}:
+    get:
+      tags: [Versions]
+      summary: List versions for a document
+      security:
+        - sessionAuth: []
+      parameters:
+        - in: path
+          name: documentId
+          required: true
+          schema:
+            type: string
+          description: Document ID
+      responses:
+        "200":
+          description: List of versions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Version"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/versions/restore/{versionId}:
+    post:
+      tags: [Versions]
+      summary: Restore a version
+      description: |
+        Replaces the live document content with the version snapshot, updates the current
+        version number, clears the in-memory Yjs state, and broadcasts a `document-restored`
+        event so all clients reload.
+      security:
+        - sessionAuth: []
+      parameters:
+        - in: path
+          name: versionId
+          required: true
+          schema:
+            type: string
+          description: Version ID
+      responses:
+        "200":
+          description: Version restored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Version restored successfully
+                  data:
+                    $ref: "#/components/schemas/Version"
+        "400":
+          description: Validation error or empty version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/versions/rename/{versionId}:
+    put:
+      tags: [Versions]
+      summary: Rename a version
+      description: Assigns a custom label to a version (e.g. "Final draft").
+      security:
+        - sessionAuth: []
+      parameters:
+        - in: path
+          name: versionId
+          required: true
+          schema:
+            type: string
+          description: Version ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  maxLength: 200
+                  example: Final draft
+      responses:
+        "200":
+          description: Version renamed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Version renamed successfully
+                  data:
+                    $ref: "#/components/schemas/Version"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ============================================================
+  # PRESENCE
+  # ============================================================
+  /api/presence/{documentId}:
+    get:
+      tags: [Presence]
+      summary: Get online users in a document
+      description: Returns users currently present in the document room (used on page load).
+      parameters:
+        - in: path
+          name: documentId
+          required: true
+          schema:
+            type: string
+          description: Document ID
+      responses:
+        "200":
+          description: List of online users
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        documentId:
+                          type: string
+                        userId:
+                          type: string
+                        socketId:
+                          type: string
+                        name:
+                          type: string
+                        email:
+                          type: string
+                        color:
+                          type: string
+                        cursor:
+                          type: object
+                        typing:
+                          type: boolean
+                        lastSeen:
+                          type: string
+                          format: date-time
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ============================================================
+  # NOTIFICATIONS
+  # ============================================================
+  /api/notifications/{userId}:
+    get:
+      tags: [Notifications]
+      summary: Get notifications for a user
+      security:
+        - sessionAuth: []
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: string
+          description: User ID
+      responses:
+        "200":
+          description: List of notifications
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Notification"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/notifications/unread/{userId}:
+    get:
+      tags: [Notifications]
+      summary: Get unread notification count
+      security:
+        - sessionAuth: []
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: string
+          description: User ID
+      responses:
+        "200":
+          description: Unread count
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  count:
+                    type: integer
+                    example: 3
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/notifications/read/{id}:
+    post:
+      tags: [Notifications]
+      summary: Mark a notification as read
+      security:
+        - sessionAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: Notification ID
+      responses:
+        "200":
+          description: Notification marked read
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: "#/components/schemas/Notification"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/notifications/read-all:
+    post:
+      tags: [Notifications]
+      summary: Mark all notifications as read
+      security:
+        - sessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId]
+              properties:
+                userId:
+                  type: string
+      responses:
+        "200":
+          description: All marked read
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      marked:
+                        type: integer
+                        description: Number of notifications marked read
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/notifications/read-document:
+    post:
+      tags: [Notifications]
+      summary: Mark document notifications as read
+      description: Marks read notifications for a specific document, optionally filtered by type.
+      security:
+        - sessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId, documentId]
+              properties:
+                userId:
+                  type: string
+                documentId:
+                  type: string
+                types:
+                  type: array
+                  items:
+                    type: string
+                    enum: [share, comment, reply, mention, delete, role, resolve]
+      responses:
+        "200":
+          description: Marked as read
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      marked:
+                        type: integer
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ============================================================
+  # UPLOADS
+  # ============================================================
+  /api/uploads/image:
+    post:
+      tags: [Uploads]
+      summary: Upload an image
+      description: |
+        Accepts a base64 data URL, saves it to the uploads folder, and returns a
+        public URL that can be embedded in documents.
+      security:
+        - sessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [dataUrl]
+              properties:
+                dataUrl:
+                  type: string
+                  description: Base64 data URL, e.g. "data:image/png;base64,..."
+                  example: "data:image/png;base64,iVBORw0KGgo..."
+      responses:
+        "201":
+          description: Image uploaded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  url:
+                    type: string
+                    description: Public URL to the uploaded image
+                  filename:
+                    type: string
+        "400":
+          description: No/invalid/empty image data or unsupported type
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "413":
+          description: Image too large
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ============================================================
+  # STATIC ASSETS
+  # ============================================================
+  /uploads/{filename}:
+    get:
+      tags: [Uploads]
+      summary: Serve an uploaded file
+      description: Serves uploaded images from the public `/uploads` directory.
+      parameters:
+        - in: path
+          name: filename
+          required: true
+          schema:
+            type: string
+          description: Uploaded filename
+      responses:
+        "200":
+          description: File stream
+          content:
+            image/*:
+              schema:
+                type: string
+                format: binary
+
+components:
+  securitySchemes:
+    sessionAuth:
+      type: apiKey
+      in: cookie
+      name: connect.sid
+      description: Session cookie set after login/register. Must be sent with every authenticated request.
+
+  responses:
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            message: Unauthorized
+
+  schemas:
+    Permission:
+      type: string
+      enum: [viewer, commenter, editor]
+      description: |
+        - `viewer` — read only
+        - `commenter` — read + comment
+        - `editor` — full edit access
+
+    User:
+      type: object
+      properties:
+        _id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        avatar:
+          type: string
+        isEmailVerified:
+          type: boolean
+        status:
+          type: string
+          enum: [online, offline]
+        lastLogin:
+          type: string
+          format: date-time
+        lastSeen:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    UserSummary:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+        avatar:
+          type: string
+
+    Document:
+      type: object
+      properties:
+        _id:
+          type: string
+        title:
+          type: string
+          maxLength: 200
+        content:
+          type: object
+          description: TipTap/ProseMirror JSON document (default `{}`)
+        pageNumberSettings:
+          $ref: "#/components/schemas/PageNumberSettings"
+        owner:
+          oneOf:
+            - type: string
+            - $ref: "#/components/schemas/UserSummary"
+        lastEditedBy:
+          type: string
+        currentVersion:
+          type: integer
+          default: 1
+        isDeleted:
+          type: boolean
+        tags:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    PageNumberSettings:
+      type: object
+      description: Page numbering configuration. Pages are visual only (frontend).
+      properties:
+        showPageNumbers:
+          type: boolean
+          default: true
+        sections:
+          type: array
+          items:
+            type: object
+            properties:
+              startPage:
+                type: integer
+                minimum: 1
+              type:
+                type: string
+                enum: [none, roman, decimal]
+              startFrom:
+                type: integer
+                minimum: 1
+                default: 1
+
+    DocumentShare:
+      type: object
+      properties:
+        _id:
+          type: string
+        documentId:
+          type: string
+        userId:
+          oneOf:
+            - type: string
+            - $ref: "#/components/schemas/UserSummary"
+        permission:
+          $ref: "#/components/schemas/Permission"
+        sharedBy:
+          oneOf:
+            - type: string
+            - $ref: "#/components/schemas/UserSummary"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    Comment:
+      type: object
+      properties:
+        _id:
+          type: string
+        documentId:
+          type: string
+        userId:
+          oneOf:
+            - type: string
+            - type: object
+              properties:
+                _id:
+                  type: string
+                name:
+                  type: string
+                email:
+                  type: string
+        parentComment:
+          type: string
+          description: Parent comment ID (null for top-level comments)
+        text:
+          type: string
+          maxLength: 2000
+        mentions:
+          type: array
+          items:
+            type: string
+          description: Mentioned user IDs
+        position:
+          type: object
+          properties:
+            start:
+              type: integer
+            end:
+              type: integer
+        isResolved:
+          type: boolean
+        resolvedBy:
+          type: string
+        resolvedAt:
+          type: string
+          format: date-time
+        isDeleted:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    Version:
+      type: object
+      properties:
+        _id:
+          type: string
+        documentId:
+          type: string
+        versionNumber:
+          type: integer
+        content:
+          type: object
+          description: TipTap JSON snapshot
+        createdBy:
+          type: string
+        changeSummary:
+          type: string
+          maxLength: 300
+        name:
+          type: string
+          maxLength: 200
+          description: Custom label, e.g. "Final draft"
+        meta:
+          type: object
+          properties:
+            sessionDuration:
+              type: number
+              description: Seconds
+            changeSize:
+              type: string
+              enum: [small, medium, large]
+            operations:
+              type: number
+            type:
+              type: string
+              enum: [content_edit, structural_change, auto_save]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    Notification:
+      type: object
+      properties:
+        _id:
+          type: string
+        receiverId:
+          type: string
+        senderId:
+          type: string
+        documentId:
+          type: string
+        commentId:
+          type: string
+        type:
+          type: string
+          enum: [share, comment, reply, mention, delete, role, resolve]
+        message:
+          type: string
+          maxLength: 300
+        isRead:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: Something went wrong
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
