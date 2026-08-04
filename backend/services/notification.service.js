@@ -6,7 +6,7 @@ import {
   markAllDocumentRead,
   markAllRead,
   deleteNotificationsForComment,
-} from "../repositories/notification.repository.js";
+} from "../Repositories/notification.repository.js";
 
 // Emit to every socket of the user so unread badges stay in sync across all
 // open tabs (dashboard + document pages) without a manual refresh.

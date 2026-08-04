@@ -9,7 +9,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 import "./config/passport.js";
-import authRoutes from "./routes/authRoutes.js";
+import authRoutes from "./Routes/authRoutes.js";
 import documentRoutes from "./Routes/document.routes.js";
 import documentShareRoutes from "./Routes/documentShare.route.js";
 import versionRoutes from "./Routes/version.routes.js";

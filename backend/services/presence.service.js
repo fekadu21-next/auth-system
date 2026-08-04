@@ -4,7 +4,7 @@ import {
   getUsersInDocument,
   updateCursor,
   updateTyping,
-} from "../repositories/presence.repository.js";
+} from "../Repositories/presence.repository.js";
 
 // USER JOIN
 export const joinPresenceService = async (data) => {

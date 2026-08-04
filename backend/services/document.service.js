@@ -1,4 +1,4 @@
-import documentRepository from "../repositories/document.repository.js";
+import documentRepository from "../Repositories/document.repository.js";
 import DocumentShare from "../Models/DocumentShare.js";
 import Document from "../Models/Documents.js";
 import { hasPermission } from "./documentShare.service.js";

@@ -1,4 +1,4 @@
-import { getUsersInDocument } from "../repositories/presence.repository.js";
+import { getUsersInDocument } from "../Repositories/presence.repository.js";
 
 // Get online users
 export const getOnlineUsers = async (req, res) => {

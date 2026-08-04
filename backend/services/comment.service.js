@@ -4,7 +4,7 @@ import {
   getCommentById,
   resolveComment,
   deleteComment,
-} from "../repositories/comment.repository.js";
+} from "../Repositories/comment.repository.js";
 import {
   removeNotificationsForCommentService,
   sendNotificationService,

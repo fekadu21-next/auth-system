@@ -5,7 +5,7 @@ import {
   createVersion,
   updateDocumentContent,
   renameVersion,
-} from "../repositories/version.repository.js";
+} from "../Repositories/version.repository.js";
 import { clearYjsDocument } from "../config/yjs.js";
 
 // Version cadence (Google-Docs-style): versions are snapshots, not every keystroke
