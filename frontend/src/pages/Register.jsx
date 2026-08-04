@@ -1,27 +1,31 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
+import { useUi } from "../Componnts/useUi.js";
+import { API_URL } from "../api.js";
 
 export default function Register() {
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const navigate = useNavigate();
+  const { showToast } = useUi();
 
   const handleRegister = async (e) => {
     e.preventDefault();
 
-    const res = await fetch("http://localhost:5000/api/auth/register", {
+    const res = await fetch(`${API_URL}/api/auth/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ name, email, password }),
     });
 
     const data = await res.json();
 
     if (res.ok) {
-      alert("Registered successfully");
+      showToast("Your account has been created successfully. Please sign in.", "success");
       navigate("/");
     } else {
-      alert(data.message);
+      showToast(data.message || data.error || "We couldn't create your account. Please try again.", "error");
     }
   };
 
@@ -38,6 +42,19 @@ export default function Register() {
         </div>
 
         <form className="mt-8 space-y-5" onSubmit={handleRegister}>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">
+              Full Name
+            </label>
+            <input
+              type="text"
+              required
+              className="w-full px-4 py-3 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition duration-200 text-slate-800 placeholder-slate-400"
+              placeholder="John Doe"
+              onChange={(e) => setName(e.target.value)}
+            />
+          </div>
+
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">
               Email Address

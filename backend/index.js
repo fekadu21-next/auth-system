@@ -1,45 +1,44 @@
-import express from "express";
-import session from "express-session";
-import pgSession from "connect-pg-simple";
-import cors from "cors";
-import helmet from "helmet";
 import dotenv from "dotenv";
-import pool from "./db.js";
-import authRoutes from "./Routes/authRoutes.js";
-import "./config/passport.js";
-
 dotenv.config();
 
-const app = express();
-const PgSession = pgSession(session);
+import http from "http";
+import mongoose from "mongoose";
+import { Server } from "socket.io";
+import { YSocketIO } from "y-socket.io/dist/server";
+import { registerNotificationSocket } from "./sockets/notification.socket.js";
 
-app.use(express.json());
-app.use(helmet());
+import app from "./app.js"; // your existing express app
+import connectDB from "./config/db.js";
+import registerDocumentSocket from "./sockets/document.socket.js";
+import { setYSocketIO } from "./config/yjs.js";
 
-app.use(cors({
-  origin: "http://localhost:5173",
-  credentials: true
-}));
-app.use(session({
-  store: new PgSession({
-    pool: pool,
-    tableName: "user_sessions"
-  }),
-  secret: process.env.SESSION_SECRET || "fallback_secret_key",
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    httpOnly: true,
-    secure: false,
-    sameSite: "lax",
-    maxAge: 1000 * 60 * 30
+// Connect DB
+await connectDB();
+
+// Create HTTP server (IMPORTANT)
+const server = http.createServer(app);
+
+// Setup Socket.IO
+const io = new Server(server, {
+  cors: {
+    origin: process.env.FRONTEND_URL || "http://localhost:5173",
+    credentials: true,
   },
-  rolling: true
-}));
+});
 
-app.use("/api/auth", authRoutes);
-app.use("/auth", authRoutes);
+// Make io instance available to controllers
+app.set('io', io);
 
-app.listen(process.env.PORT, () =>
-  console.log(`Server running on port ${process.env.PORT}`)
-);
+// Setup YSocketIO for Tiptap collaboration
+const ysocketio = new YSocketIO(io);
+ysocketio.initialize();
+setYSocketIO(ysocketio);
+
+// Register socket logic
+registerDocumentSocket(io);
+registerNotificationSocket(io);
+// Start server
+const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});

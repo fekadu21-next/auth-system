@@ -1,15 +1,18 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
+import { useUi } from "../Componnts/useUi.js";
+import { API_URL } from "../api.js";
 
 export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const navigate = useNavigate();
+  const { showToast } = useUi();
 
   const handleLogin = async (e) => {
     e.preventDefault();
 
-    const res = await fetch("http://localhost:5000/api/auth/login", {
+    const res = await fetch(`${API_URL}/api/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
@@ -18,15 +21,23 @@ export default function Login() {
 
     const data = await res.json();
 
+    const searchParams = new URLSearchParams(window.location.search);
+    const redirectUrl = searchParams.get("redirect") || "/dashboard";
+
     if (res.ok) {
-      navigate("/dashboard");
+      navigate(redirectUrl);
     } else {
-      alert(data.message);
+      showToast(data.message || "Unable to sign in. Please check your credentials and try again.", "error");
     }
   };
 
   const handleGoogleLogin = () => {
-    window.location.href = "http://localhost:5000/api/auth/google";
+    const searchParams = new URLSearchParams(window.location.search);
+    const redirectUrl = searchParams.get("redirect");
+    if (redirectUrl) {
+      document.cookie = `post_login_redirect=${redirectUrl}; path=/; max-age=3600`;
+    }
+    window.location.href = `${API_URL}/api/auth/google`;
   };
 
   return (
