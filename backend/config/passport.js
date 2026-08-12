@@ -15,10 +15,15 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
       },
       async (accessToken, refreshToken, profile, done) => {
         try {
+          if (!profile.emails || profile.emails.length === 0) {
+            console.error("Google Auth Error: No email provided in profile");
+            return done(null, false, { message: "No email provided from Google" });
+          }
+
           const googleId = profile.id;
           const email = profile.emails[0].value.toLowerCase();
           const name = profile.displayName || email.split("@")[0];
-          const avatar = profile.photos?.[0]?.value || "";
+          const avatar = profile.photos && profile.photos.length > 0 ? profile.photos[0].value : "";
 
           let user = await User.findOne({ googleId });
 
@@ -49,7 +54,8 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
 
           return done(null, user);
         } catch (error) {
-          return done(error, null);
+          console.error("🚨 Google Strategy Error:", error);
+          return done(null, false, { message: "Internal authentication error" });
         }
       }
     )
