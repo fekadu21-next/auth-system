@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
+import Landing from "./pages/Landing";
 import DashboardPage from "./pages/DashboardPage";
 import DocumentPage from "./pages/DocumentPage";
 import { UiProvider } from "./Componnts/UiProvider.jsx";
@@ -13,7 +14,8 @@ export default function App() {
     <BrowserRouter>
       <SessionManager />
       <Routes>
-        <Route path="/" element={<Login />} />
+        <Route path="/" element={<Landing />} />
+        <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/document/:id" element={<DocumentPage />} />
