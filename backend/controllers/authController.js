@@ -17,6 +17,11 @@ import { isStrongPassword } from "../utils/validatePassword.js";
 export const register = async (req, res) => {
   try {
     const { name, email, password } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ message: "Email is required" });
+    }
+
     const displayName = name?.trim() || email.split("@")[0];
 
     if (displayName.length < 2) {
