@@ -23,13 +23,25 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
           let user = await User.findOne({ googleId });
 
           if (!user) {
-            user = await User.create({
-              name,
-              email,
-              googleId,
-              avatar,
-              isEmailVerified: true,
-            });
+            // Check if user exists by email but without googleId
+            user = await User.findOne({ email });
+
+            if (user) {
+              // Link Google account to existing user
+              user.googleId = googleId;
+              if (avatar && !user.avatar) user.avatar = avatar;
+              user.isEmailVerified = true;
+              await user.save();
+            } else {
+              // Create completely new user
+              user = await User.create({
+                name,
+                email,
+                googleId,
+                avatar,
+                isEmailVerified: true,
+              });
+            }
           } else if (avatar && user.avatar !== avatar) {
             user.avatar = avatar;
             await user.save();
