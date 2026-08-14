@@ -29,7 +29,21 @@ router.get(
 
 router.get(
   "/google/callback",
-  passport.authenticate("google", { session: false, failureRedirect: `${process.env.FRONTEND_URL || "http://localhost:5173"}/login?error=google_auth_failed` }),
+  (req, res, next) => {
+    passport.authenticate("google", { session: false }, (err, user, info) => {
+      if (err) {
+        console.error("🚨 Passport Auth Error:", err);
+        const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+        return res.redirect(`${frontendUrl}/login?error=google_auth_failed&message=${encodeURIComponent(err.message || 'Unknown error')}`);
+      }
+      if (!user) {
+        const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+        return res.redirect(`${frontendUrl}/login?error=google_auth_failed`);
+      }
+      req.user = user;
+      next();
+    })(req, res, next);
+  },
   async (req, res) => {
     try {
       if (!req.user) {

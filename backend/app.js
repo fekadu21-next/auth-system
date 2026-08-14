@@ -8,7 +8,7 @@ import helmet from "helmet";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import "./config/passport.js";
+import passport from "./config/passport.js";
 import authRoutes from "./Routes/authRoutes.js";
 import documentRoutes from "./Routes/document.routes.js";
 import documentShareRoutes from "./Routes/documentShare.route.js";
@@ -87,6 +87,8 @@ app.use(
   })
 );
 
+app.use(passport.initialize());
+
 // Static uploaded images
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
@@ -100,5 +102,15 @@ app.use("/api/comments", commentRoutes);
 app.use("/api/presence", presenceRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/uploads", uploadRoutes);
+
+// Global Error Handler to prevent 500 crashes and redirect gracefully
+app.use((err, req, res, next) => {
+  console.error("🚨 Global Express Error:", err);
+  if (req.path.startsWith('/api/auth/google/callback') || req.path.startsWith('/auth/google/callback')) {
+    const frontendUrl = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.trim() : "http://localhost:5173";
+    return res.redirect(`${frontendUrl}/login?error=server_error&message=${encodeURIComponent(err.message || 'Unknown')}`);
+  }
+  res.status(500).json({ success: false, message: "Internal Server Error", error: err.message });
+});
 
 export default app;
