@@ -24,7 +24,7 @@ const io = new Server(server, {
     origin: [
       "http://localhost:5173",
       "https://livedocs-brown.vercel.app",
-      process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, "") : null
+      process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/^["']|["']$/g, '').trim().replace(/\/$/, "") : null
     ].filter(Boolean),
     credentials: true,
   },

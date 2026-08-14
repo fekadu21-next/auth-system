@@ -36,7 +36,8 @@ app.use(
         "https://livedocs-brown.vercel.app"
       ];
       if (process.env.FRONTEND_URL) {
-        allowedOrigins.push(process.env.FRONTEND_URL.replace(/\/$/, ""));
+        const cleanUrl = process.env.FRONTEND_URL.replace(/^["']|["']$/g, '').trim();
+        allowedOrigins.push(cleanUrl.replace(/\/$/, ""));
       }
 
       if (!origin || allowedOrigins.includes(origin.replace(/\/$/, ""))) {
@@ -107,7 +108,7 @@ app.use("/api/uploads", uploadRoutes);
 app.use((err, req, res, next) => {
   console.error("🚨 Global Express Error:", err);
   if (req.path.startsWith('/api/auth/google/callback') || req.path.startsWith('/auth/google/callback')) {
-    const frontendUrl = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.trim() : "http://localhost:5173";
+    const frontendUrl = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/^["']|["']$/g, '').trim() : "http://localhost:5173";
     return res.redirect(`${frontendUrl}/login?error=server_error&message=${encodeURIComponent(err.message || 'Unknown')}`);
   }
   res.status(500).json({ success: false, message: "Internal Server Error", error: err.message });

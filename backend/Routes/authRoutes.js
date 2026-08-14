@@ -33,11 +33,11 @@ router.get(
     passport.authenticate("google", { session: false }, (err, user, info) => {
       if (err) {
         console.error("🚨 Passport Auth Error:", err);
-        const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+        const frontendUrl = (process.env.FRONTEND_URL || "http://localhost:5173").replace(/^["']|["']$/g, '').trim();
         return res.redirect(`${frontendUrl}/login?error=google_auth_failed&message=${encodeURIComponent(err.message || 'Unknown error')}`);
       }
       if (!user) {
-        const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+        const frontendUrl = (process.env.FRONTEND_URL || "http://localhost:5173").replace(/^["']|["']$/g, '').trim();
         return res.redirect(`${frontendUrl}/login?error=google_auth_failed`);
       }
       req.user = user;
@@ -61,7 +61,7 @@ router.get(
         userAgent: req.headers["user-agent"],
       };
       
-      const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+      const frontendUrl = (process.env.FRONTEND_URL || "http://localhost:5173").replace(/^["']|["']$/g, '').trim();
       let redirectUrl = `${frontendUrl}/dashboard`;
       if (req.cookies && req.cookies.post_login_redirect) {
         redirectUrl = `${frontendUrl}${req.cookies.post_login_redirect}`;
@@ -70,7 +70,7 @@ router.get(
       res.redirect(redirectUrl);
     } catch (error) {
       console.error("🚨 Google Callback Error:", error);
-      const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+      const frontendUrl = (process.env.FRONTEND_URL || "http://localhost:5173").replace(/^["']|["']$/g, '').trim();
       res.redirect(`${frontendUrl}/login?error=google_auth_failed`);
     }
   }
